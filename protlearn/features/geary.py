@@ -1,6 +1,6 @@
 # Author: Thomas Dorfer <thomas.a.dorfer@gmail.com>
 
-import numpy as np # <-- Added import
+import numpy as np
 import pandas as pd
 from ..utils.validation import check_input, check_alpha, check_natural
 import pkg_resources
@@ -43,9 +43,7 @@ def geary(X, *, d=1, properties=default, start=1, end=None):
     -------
 
     arr : ndarray of shape (n_samples, n_properties)
-        Array containing Geary's C autocorrelation descriptors. Will contain NaN
-        where the calculation is undefined (e.g., sequence length <= 1 or
-        zero variance of the property in the sequence).
+        Array containing Geary's C autocorrelation descriptors.
 
     References
     ----------
@@ -69,104 +67,76 @@ def geary(X, *, d=1, properties=default, start=1, end=None):
     --------
 
     >>> from protlearn.features import geary
-    >>> seqs = ['ARKLY', 'EERKPGL', 'A'] # Added short seq 'A'
+    >>> seqs = ['ARKLY', 'EERKPGL']
     >>> gearyC = geary(seqs)
-    >>> # Note: The output for 'A' will be NaN because len(seq)-1 is zero
-    >>> print(gearyC)
-    [[0.52746275 1.12898944 0.94222955 0.39077186 0.96444569 0.66346012
-      0.87481962 0.32546227]
-     [0.65656058 0.95397893 0.87962853 0.70972353 0.65407555 0.96823847
-      1.01949384 0.21073089]
-     [       nan        nan        nan        nan        nan        nan
-             nan        nan]]
+    >>> gearyC
+    array([[0.52746275, 1.12898944, 0.94222955, 0.39077186, 0.96444569,
+            0.66346012, 0.87481962, 0.32546227],
+           [0.65656058, 0.95397893, 0.87962853, 0.70972353, 0.65407555,
+            0.96823847, 1.01949384, 0.21073089]])
 
     """
 
     # input handling
     X = check_input(X)
-    # Check d against original sequence lengths before potential slicing
-    # Note: The original check might still be insufficient if slicing makes sequences too short for d
-    min_len_orig = min([len(seq) for seq in X])
+    min_len = min([len(seq) for seq in X])
     if d > 30:
         raise ValueError('Maximum lag parameter is 30!')
-    # Check if d is valid for the *shortest possible* sequence *after* slicing
-    # This is hard to check perfectly without knowing start/end, so rely on loop check
-    # However, a basic check against original min length is still useful:
-    if d >= min_len_orig:
-        raise ValueError(f'Lag parameter d ({d}) must be smaller than the minimum original sequence length ({min_len_orig})!')
-
+    if d >= min_len:
+        raise ValueError('Lag parameter d must be smaller than sequence length!')
 
     # load data
     df = pd.read_csv(PATH+'aaindex1.csv').set_index('Description')
     df = df.reindex(sorted(df.columns), axis=1)
-    # Ensure properties exist in the loaded data
-    try:
-        data = np.asarray(df.loc[properties])
-    except KeyError as e:
-        raise ValueError(f"One or more properties not found in AAIndex1: {e}")
+    data = np.asarray(df.loc[properties]) # Use specified or default properties
 
     # list of amino acids (IUPAC standard)
     amino_acids = 'ACDEFGHIKLMNPQRSTVWY'
     aadict = {amino_acids[i]: i for i in range(20)}
 
     # standardization
-    standardized_data = np.zeros_like(data, dtype=float)
     for i in range(data.shape[0]):
-        mean_val = np.mean(data[i,:])
-        std_val = np.std(data[i,:])
-        # Handle case where all values in a property row are the same (std_dev=0)
-        if std_val == 0:
-             standardized_data[i,:] = 0.0 # Or handle as appropriate, e.g., np.nan or raise error
+        mean_val = np.mean(data[i, :])
+        std_dev = np.std(data[i, :])
+        if not np.isclose(std_dev, 0): # Avoid division by zero if std is zero
+             data[i,:] = [(j - mean_val) / std_dev for j in data[i, :]]
         else:
-             standardized_data[i,:] = (data[i,:] - mean_val) / std_val
+             data[i,:] = [0.0 for j in data[i,:]] # Assign zero if std is zero
 
     # calculate Geary's C
     arr = np.zeros((len(X), len(properties)))
-    for i, seq_orig in enumerate(X):
-        check_alpha(seq_orig) # check if alphabetical
-        check_natural(seq_orig) # check for unnatural amino acids
-        
-        # Apply positional slicing
-        seq = seq_orig[start-1:end]
-        seq_len = len(seq)
+    for i, seq in enumerate(X):
+        check_alpha(seq) # check if alphabetical
+        check_natural(seq) # check for unnatural amino acids
+        seq = seq[start-1:end] # positional information
 
-        # Check if lag 'd' is valid for the potentially sliced sequence length
-        if d >= seq_len:
-             # If lag is too large for this specific sequence after slicing, fill with NaN
-             arr[i, :] = np.nan
-             # Optionally, print a warning or log this occurrence
-             # print(f"Warning: Lag d={d} >= length of sliced sequence {seq_len} for original index {i}. Setting output to NaN.")
-             continue # Skip to the next sequence
+        # Check for sequence length = 1 after slicing
+        if len(seq) <= 1:
+           arr[i, :] = 0.0 # Assign 0 or handle as appropriate for length 1
+           continue # Skip calculation for this sequence
 
-        # Pre-calculate part of eq1 (valid only if seq_len > d)
-        eq1_part = 1 / (2 * (seq_len - d)) # Note: seq_len > d checked above
-
+        eq1 = 1.0 / (2 * (len(seq) - d)) # Use 1.0 for float division
         for j in range(len(properties)):
-            # Get standardized property values for the amino acids in the sequence
-            try:
-                 p = [standardized_data[j, aadict[aa]] for aa in seq]
-            except KeyError as e:
-                 raise ValueError(f"Sequence '{seq_orig}' (index {i}) contains non-standard amino acid {e} not in 'ACDEFGHIKLMNPQRSTVWY'")
+            p = [data[j, aadict[aa]] for aa in seq]
+            p_prime = sum(p) / len(seq)
+            eq2 = sum([(p[k] - p[k+d])**2 for k in range(len(seq)-d)])
+            eq3 = sum([(p[k] - p_prime)**2 for k in range(len(seq))])
 
-            # Check for invalid sequence length for Geary's formula
-            if seq_len <= 1:
-                arr[i, j] = np.nan # Denominator term (1/(seq_len-1)) is undefined
-                continue # Skip to next property
+            # --- Start Modification ---
+            # Check for len(seq) - 1 == 0 explicitly, though d>=min_len check should cover it
+            if len(seq) - 1 == 0:
+                arr[i,j] = 0.0
+                continue
 
-            p_prime = sum(p) / seq_len
-            eq2 = sum([(p[k] - p[k + d])**2 for k in range(seq_len - d)])
-            eq3 = sum([(p[k] - p_prime)**2 for k in range(seq_len)])
+            denominator_scale = (1.0 / (len(seq) - 1)) # Use 1.0 for float division
+            denominator = denominator_scale * eq3
 
-            # --- Modification Start ---
-            # Calculate denominator, checking for zero division potential
-            denominator = (1 / (seq_len - 1)) * eq3
-
-            # Check if denominator is close to zero (handles eq3 == 0 case)
-            if abs(denominator) < 1e-9:
-                arr[i, j] = np.nan # Undefined result (zero variance)
+            # Check if the denominator is zero or very close to it
+            if np.isclose(denominator, 0.0):
+                arr[i, j] = 0.0  # Assign 0 if variance (eq3) is zero
             else:
-                # Calculate Geary's C = eq1 * eq2 / denominator
-                arr[i, j] = eq1_part * eq2 / denominator
-            # --- Modification End ---
+                # Original calculation if denominator is non-zero
+                arr[i, j] = (eq1 * eq2) / denominator
+            # --- End Modification ---
 
     return arr
