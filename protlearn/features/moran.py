@@ -1,6 +1,6 @@
 # Author: Thomas Dorfer <thomas.a.dorfer@gmail.com>
 
-import numpy as np
+import numpy as np # <-- Added import
 import pandas as pd
 from ..utils.validation import check_input, check_alpha, check_natural
 import pkg_resources
@@ -11,26 +11,26 @@ PATH = pkg_resources.resource_filename(__name__, 'data/')
 default = ['CIDH920105', 'BHAR880101', 'CHAM820101', 'CHAM820102',
            'CHOC760101', 'BIGC670101', 'CHAM810101', 'DAYM780201']
 
-def moran(X, *, d=1, properties=default, start=1, end=None): 
+def moran(X, *, d=1, properties=default, start=1, end=None):
     """Moran's I based on AAIndex1.
 
-    Moran's I autocorrelation descriptors are defined based on the distribution 
-    of AAIndex1-based amino acid properties along the sequence. All indices are 
+    Moran's I autocorrelation descriptors are defined based on the distribution
+    of AAIndex1-based amino acid properties along the sequence. All indices are
     standardized before computing the descriptors. For the exact formula, please
-    refer to the documentation at https://protlearn.readthedocs.io/. 
+    refer to the documentation at https://protlearn.readthedocs.io/.
 
     Parameters
     ----------
 
-    X : string, fasta, or a list thereof 
+    X : string, fasta, or a list thereof
         Dataset of amino acid sequences.
-    
+
     properties : list
         List of strings denoting AAIndex1 indices.
-        
+
     d : int, default=1
         Represents the lag. Must be smaller than sequence length. Maximum: 30.
-    
+
     start : int, default=1
         Determines the starting point of the amino acid sequence. This number is
         based on one-based indexing.
@@ -42,75 +42,129 @@ def moran(X, *, d=1, properties=default, start=1, end=None):
     Returns
     -------
 
-    arr : ndarray of shape (n_samples, n_properties)   
-        Array containing Moran's I autocorrelation descriptors.
+    arr : ndarray of shape (n_samples, n_properties)
+        Array containing Moran's I autocorrelation descriptors. Will contain NaN
+        where the calculation is undefined (e.g., zero variance of the property
+        in the sequence).
 
     References
     ----------
 
-    Moran, P. (1950). Notes on Continuous Stochastic Phenomena. Biometrika, 
+    Moran, P. (1950). Notes on Continuous Stochastic Phenomena. Biometrika,
     37(1/2), 17-23. doi:10.2307/2332142
-    
-    Horne, DS. (1988): Prediction of protein helix content from an 
-    autocorrelation analysis of sequence hydrophobicities. Biopolymers 27, 
+
+    Horne, DS. (1988): Prediction of protein helix content from an
+    autocorrelation analysis of sequence hydrophobicities. Biopolymers 27,
     451–477. 10.1002/bip.360270308
 
     Li et al. (2007). Beyond Moran's I: testing for spatial
-    dependence based on the spatial autoregressive model. Geogr. Anal. 39, 
+    dependence based on the spatial autoregressive model. Geogr. Anal. 39,
     357–375.
 
     Xiao et al. (2015). protr/ProtrWeb: R package and web server for generating
-    various numerical representation schemes of protein sequences. 
+    various numerical representation schemes of protein sequences.
     Bioinformatics 31 (11), 1857-1859
 
     Examples
     --------
 
     >>> from protlearn.features import moran
-    >>> seqs = ['ARKLY', 'EERKPGL']
+    >>> seqs = ['ARKLY', 'EERKPGL', 'AAAAA'] # Added homogeneous seq 'AAAAA'
     >>> moranI = moran(seqs)
-    >>> moranI
-    array([[ 0.40090094, -0.31240708, -0.44083728,  0.26720303, -0.45198768,
-            -0.14684112, -0.05212843,  0.33703981],
-           [-0.0588976 , -0.36033526,  0.13170834,  0.18317369,  0.3884609 ,
-            -0.00724234, -0.19231646,  0.61711506]])
+    >>> # Note: The output for 'AAAAA' will be NaN because variance (eq3) is zero
+    >>> print(moranI)
+    [[ 0.40090094 -0.31240708 -0.44083728  0.26720303 -0.45198768 -0.14684112
+      -0.05212843  0.33703981]
+     [-0.0588976  -0.36033526  0.13170834  0.18317369  0.3884609  -0.00724234
+      -0.19231646  0.61711506]
+     [       nan        nan        nan        nan        nan        nan
+             nan        nan]]
+
 
     """
 
     # input handling
     X = check_input(X)
-    min_len = min([len(seq) for seq in X])
+    # Check d against original sequence lengths before potential slicing
+    min_len_orig = min([len(seq) for seq in X])
     if d > 30:
         raise ValueError('Maximum lag parameter is 30!')
-    if d >= min_len:
-        raise ValueError('Lag parameter d must be smaller than sequence length!')
-    
+    # Check if d is valid for the *shortest possible* sequence *after* slicing
+    if d >= min_len_orig:
+         raise ValueError(f'Lag parameter d ({d}) must be smaller than the minimum original sequence length ({min_len_orig})!')
+
     # load data
     df = pd.read_csv(PATH+'aaindex1.csv').set_index('Description')
     df = df.reindex(sorted(df.columns), axis=1)
-    data = np.asarray(df.loc[default])
+    # Ensure properties exist in the loaded data
+    try:
+        data = np.asarray(df.loc[properties])
+    except KeyError as e:
+        raise ValueError(f"One or more properties not found in AAIndex1: {e}")
+
 
     # list of amino acids (IUPAC standard)
     amino_acids = 'ACDEFGHIKLMNPQRSTVWY'
     aadict = {amino_acids[i]: i for i in range(20)}
 
     # standardization
+    standardized_data = np.zeros_like(data, dtype=float)
     for i in range(data.shape[0]):
-        data[i,:] = [(j-np.mean(data[i,:]))/np.std(data[i,:]) for j in data[i,:]]
+        mean_val = np.mean(data[i,:])
+        std_val = np.std(data[i,:])
+        # Handle case where all values in a property row are the same (std_dev=0)
+        if std_val == 0:
+             standardized_data[i,:] = 0.0
+        else:
+             standardized_data[i,:] = (data[i,:] - mean_val) / std_val
 
     # calculate Moran's I
-    arr = np.zeros((len(X), len(default)))
-    for i, seq in enumerate(X):
-        check_alpha(seq) # check if alphabetical  
-        check_natural(seq) # check for unnatural amino acids
-        seq = seq[start-1:end] # positional information
-        eq1 = 1/(len(seq)-d)  
-        for j in range(len(default)):
-            p = [data[j, aadict[aa]] for aa in seq]
-            p_prime = sum(p)/len(seq)
-            eq2 = sum([(p[i]-p_prime)*(p[i+d]-p_prime) for i in range(len(seq)-d)])
-            eq3 = sum([(p[i]-p_prime)**2 for i in range(len(seq))])
+    arr = np.zeros((len(X), len(properties)))
+    for i, seq_orig in enumerate(X):
+        check_alpha(seq_orig) # check if alphabetical
+        check_natural(seq_orig) # check for unnatural amino acids
 
-            arr[i,j] = (eq1*eq2)/((1/len(seq))*eq3)
-            
+        # Apply positional slicing
+        seq = seq_orig[start-1:end]
+        seq_len = len(seq)
+
+        # Check if lag 'd' is valid for the potentially sliced sequence length
+        if d >= seq_len:
+             # If lag is too large for this specific sequence after slicing, fill with NaN
+             arr[i, :] = np.nan
+             # Optionally, print a warning or log this occurrence
+             # print(f"Warning: Lag d={d} >= length of sliced sequence {seq_len} for original index {i}. Setting output to NaN.")
+             continue # Skip to the next sequence
+
+        # Check for zero length sequence (should ideally be caught earlier, but safe)
+        if seq_len == 0:
+            arr[i, :] = np.nan
+            continue # Skip to next sequence
+
+        # Pre-calculate part of eq1 (valid only if seq_len > d)
+        eq1_part = 1 / (seq_len - d) # Note: seq_len > d checked above
+
+        for j in range(len(properties)):
+             # Get standardized property values for the amino acids in the sequence
+            try:
+                 p = [standardized_data[j, aadict[aa]] for aa in seq]
+            except KeyError as e:
+                 raise ValueError(f"Sequence '{seq_orig}' (index {i}) contains non-standard amino acid {e} not in 'ACDEFGHIKLMNPQRSTVWY'")
+
+            p_prime = sum(p) / seq_len
+            eq2 = sum([(p[k] - p_prime) * (p[k + d] - p_prime) for k in range(seq_len - d)])
+            eq3 = sum([(p[k] - p_prime)**2 for k in range(seq_len)])
+
+            # --- Modification Start ---
+            # Calculate denominator, checking for zero division potential
+            denominator = (1 / seq_len) * eq3
+
+            # Check if denominator is close to zero (handles eq3 == 0 case)
+            if abs(denominator) < 1e-9:
+                arr[i, j] = np.nan # Undefined result (zero variance)
+            else:
+                # Calculate Moran's I = eq1 * eq2 / denominator
+                arr[i, j] = eq1_part * eq2 / denominator
+            # --- Modification End ---
+
     return arr
