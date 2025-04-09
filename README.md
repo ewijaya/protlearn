@@ -22,11 +22,20 @@
 </p>
 <hr><br>
 
-**Note:** This is a fork of the original `protlearn` package available at `https://github.com/tadorfer/protlearn`. This fork includes specific fixes or modifications.
+**Note:** This is a fork of the original `protlearn` package available at `https://github.com/tadorfer/protlearn`.
 
 *protlearn* is a Python package for the feature extraction of amino acid sequences.
 It is comprised of three stages - preprocessing, feature computation, and
-subsequent dimensionality reduction. This version has been tested with Python 3.12 and includes fixes for potential runtime warnings in autocorrelation calculations.
+subsequent dimensionality reduction. This version has been tested with Python 3.12.
+
+## Changes in this Fork
+
+This fork includes the following modifications compared to the original `tadorfer/protlearn` (as of the fork point):
+
+1.  **Fix for Autocorrelation RuntimeWarning:**
+    *   **Problem:** The original code could produce `RuntimeWarning: invalid value encountered in scalar divide` when calculating Moran's I (`moran.py`) and Geary's C (`geary.py`) autocorrelation features.
+    *   **Cause:** This warning occurred when processing input sequences where a specific physicochemical property had zero variance. This typically happens with uniform sequences composed of only one type of amino acid (e.g., "AAAAAA", "LLLLLL"). In these cases, the variance term in the denominator of the autocorrelation calculation becomes zero, leading to division by zero.
+    *   **Solution:** Modified `moran.py` and `geary.py` to explicitly check if the denominator (specifically the variance term `eq3` multiplied by its scaling factor) is close to zero using `np.isclose()` before performing the division. If the denominator is zero, the autocorrelation value for that property and lag is now assigned `0.0`, preventing the runtime warning.
 
 ## Overview
 
@@ -34,7 +43,7 @@ subsequent dimensionality reduction. This version has been tested with Python 3.
   <img src="https://raw.githubusercontent.com/tadorfer/protlearn/master/imgs/protlearn_summary.png" height="430" width="624">
 </p>
 
-For more information on how to use it, please refer to the [original documentation](https://protlearn.readthedocs.io/en/latest/).
+For more information on how to use the package features, please refer to the [original documentation](https://protlearn.readthedocs.io/en/latest/).
 
 ## Installation
 
@@ -51,7 +60,7 @@ For more information on how to use it, please refer to the [original documentati
 
 #### Installing this Fork (Recommended for fixes)
 
-To install this specific forked version including any fixes:
+To install this specific forked version including the fix mentioned above:
 
 ```bash
 pip install git+https://github.com/ewijaya/protlearn.git
